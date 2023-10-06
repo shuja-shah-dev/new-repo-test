@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>WebSocket Video Streaming</title>
+</head>
+<body>
+    <h1>WebSocket Video Streaming</h1>
+    <img id="video-frame" src="" alt="Video Stream">
+    
+    <script>
+        const videoFrame = document.getElementById('video-frame');
+        const ws = new WebSocket('ws://127.0.0.1:5000/video_feed');
+
+        ws.binaryType = 'arraybuffer'; // Set binary data type
+
+        ws.onmessage = (event) => {
+            const arrayBuffer = event.data;
+            const uint8Array = new Uint8Array(arrayBuffer);
+            const blob = new Blob([uint8Array], { type: 'image/jpeg' });
+            const imageUrl = URL.createObjectURL(blob);
+
+            videoFrame.src = imageUrl;
+        };
+
+        ws.onclose = () => {
+            console.log('WebSocket connection closed');
+        };
+    </script>
+</body>
+</html>
