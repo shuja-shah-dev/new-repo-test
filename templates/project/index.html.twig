@@ -37,6 +37,18 @@
         {{ widgets.badge_team_access(entry.teams) }}
     {% elseif column == 'visible' %}
         {{ widgets.label_visible(entry.visible) }}
+    {% elseif column == 'Project_Id' %}
+        {{ entry.id }}
+    {% elseif column == 'activities' %}
+        {% if activitiesByProject[entry.id] is defined %}
+            <ul>
+                {% for activity in activitiesByProject[entry.id] %}
+                    <li>{{ activity.name }}</li>
+                {% endfor %}
+            </ul>
+        {% else %}
+            &ndash;
+        {% endif %}
     {% elseif column == 'actions' %}
         {{ actions.project(entry, 'index') }}
     {% elseif column starts with 'mf_' %}

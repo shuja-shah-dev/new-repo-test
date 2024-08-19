@@ -203,16 +203,89 @@ class ProjectRepository extends EntityRepository
         return $qb;
     }
 
+    // private function getQueryBuilderForQuery(ProjectQuery $query): QueryBuilder
+    // {
+    //     $qb = $this->getEntityManager()->createQueryBuilder();
+
+    //     $qb
+    //         ->select('p')
+    //         ->from(Project::class, 'p')
+    //         ->leftJoin('p.customer', 'c')
+    //     ;
+
+    //     foreach ($query->getOrderGroups() as $orderBy => $order) {
+    //         switch ($orderBy) {
+    //             case 'customer':
+    //                 $orderBy = 'c.name';
+    //                 break;
+    //             case 'project_start':
+    //                 $orderBy = 'p.start';
+    //                 break;
+    //             case 'project_end':
+    //                 $orderBy = 'p.end';
+    //                 break;
+    //             default:
+    //                 $orderBy = 'p.' . $orderBy;
+    //                 break;
+    //         }
+    //         $qb->addOrderBy($orderBy, $order);
+    //     }
+
+    //     if (!$query->isShowBoth()) {
+    //         $qb
+    //             ->andWhere($qb->expr()->eq('p.visible', ':visible'))
+    //             ->andWhere($qb->expr()->eq('c.visible', ':customer_visible'))
+    //         ;
+
+    //         if ($query->isShowVisible()) {
+    //             $qb->setParameter('visible', true, ParameterType::BOOLEAN);
+    //         } elseif ($query->isShowHidden()) {
+    //             $qb->setParameter('visible', false, ParameterType::BOOLEAN);
+    //         }
+
+    //         $qb->setParameter('customer_visible', true, ParameterType::BOOLEAN);
+    //     }
+
+    //     if ($query->hasCustomers()) {
+    //         $qb->andWhere($qb->expr()->in('p.customer', ':customer'))
+    //             ->setParameter('customer', $query->getCustomerIds());
+    //     }
+
+    //     if ($query->getGlobalActivities() !== null) {
+    //         $qb->andWhere($qb->expr()->eq('p.globalActivities', ':globalActivities'))
+    //             ->setParameter('globalActivities', $query->getGlobalActivities(), Types::BOOLEAN);
+    //     }
+
+    //     // this is far from being perfect, possible enhancements:
+    //     // there could also be a range selection to be able to select all projects that were active between from and to
+    //     // begin = null and end = null
+    //     // begin = null and end <= to
+    //     // begin < to and end = null
+    //     // begin > from and end < to
+    //     // ... and more ...
+    //     $times = $this->addProjectStartAndEndDate($qb, $query->getProjectStart(), $query->getProjectEnd());
+    //     if ($times->count() > 0) {
+    //         $qb->andWhere($times);
+    //     }
+
+    //     $this->addPermissionCriteria($qb, $query->getCurrentUser());
+
+    //     $this->addSearchTerm($qb, $query);
+
+    //     return $qb;
+    // }
+
     private function getQueryBuilderForQuery(ProjectQuery $query): QueryBuilder
     {
         $qb = $this->getEntityManager()->createQueryBuilder();
-
+    
         $qb
             ->select('p')
             ->from(Project::class, 'p')
             ->leftJoin('p.customer', 'c')
+            ->leftJoin(Activity::class, 'a', 'WITH', 'a.project = p.id') // Manual join using projectId
         ;
-
+    
         foreach ($query->getOrderGroups() as $orderBy => $order) {
             switch ($orderBy) {
                 case 'customer':
@@ -230,48 +303,53 @@ class ProjectRepository extends EntityRepository
             }
             $qb->addOrderBy($orderBy, $order);
         }
-
+    
         if (!$query->isShowBoth()) {
             $qb
                 ->andWhere($qb->expr()->eq('p.visible', ':visible'))
                 ->andWhere($qb->expr()->eq('c.visible', ':customer_visible'))
             ;
-
+    
             if ($query->isShowVisible()) {
                 $qb->setParameter('visible', true, ParameterType::BOOLEAN);
             } elseif ($query->isShowHidden()) {
                 $qb->setParameter('visible', false, ParameterType::BOOLEAN);
             }
-
+    
             $qb->setParameter('customer_visible', true, ParameterType::BOOLEAN);
         }
-
+    
         if ($query->hasCustomers()) {
             $qb->andWhere($qb->expr()->in('p.customer', ':customer'))
                 ->setParameter('customer', $query->getCustomerIds());
         }
-
+    
         if ($query->getGlobalActivities() !== null) {
             $qb->andWhere($qb->expr()->eq('p.globalActivities', ':globalActivities'))
                 ->setParameter('globalActivities', $query->getGlobalActivities(), Types::BOOLEAN);
         }
+    
+        // Filter by projectId if it is set
+        if ($query->getProjectId()) {
+            $qb->andWhere($qb->expr()->eq('p.id', ':projectId'))
+                ->setParameter('projectId', $query->getProjectId());
+        }
 
-        // this is far from being perfect, possible enhancements:
-        // there could also be a range selection to be able to select all projects that were active between from and to
-        // begin = null and end = null
-        // begin = null and end <= to
-        // begin < to and end = null
-        // begin > from and end < to
-        // ... and more ...
+        if ($query->getActivitySearch()) { // Add this condition
+            $qb->andWhere($qb->expr()->like('a.name', ':activitySearch'))
+                ->setParameter('activitySearch', '%' . $query->getActivitySearch() . '%');
+        }    
+    
+        // Handle date ranges
         $times = $this->addProjectStartAndEndDate($qb, $query->getProjectStart(), $query->getProjectEnd());
         if ($times->count() > 0) {
             $qb->andWhere($times);
         }
-
+    
         $this->addPermissionCriteria($qb, $query->getCurrentUser());
-
+    
         $this->addSearchTerm($qb, $query);
-
+    
         return $qb;
     }
 
@@ -332,16 +410,39 @@ class ProjectRepository extends EntityRepository
         return $and;
     }
 
+    // public function countProjectsForQuery(ProjectQuery $query): int
+    // {
+    //     $qb = $this->getQueryBuilderForQuery($query);
+    //     $qb
+    //         ->resetDQLPart('select')
+    //         ->resetDQLPart('orderBy')
+    //         ->resetDQLPart('groupBy')
+    //         ->select($qb->expr()->countDistinct('p.id'))
+    //     ;
+
+    //     return (int) $qb->getQuery()->getSingleScalarResult();
+    // }
+
     public function countProjectsForQuery(ProjectQuery $query): int
     {
+        // Create the query builder
         $qb = $this->getQueryBuilderForQuery($query);
+    
+        // Reset parts of the query builder to count only
         $qb
             ->resetDQLPart('select')
             ->resetDQLPart('orderBy')
             ->resetDQLPart('groupBy')
             ->select($qb->expr()->countDistinct('p.id'))
         ;
-
+    
+        // Ensure the projectId filter is applied if set
+        if ($query->getProjectId()) {
+            $qb->andWhere($qb->expr()->eq('p.id', ':projectId'))
+               ->setParameter('projectId', $query->getProjectId());
+        }
+    
+        // Execute the query to get the count
         return (int) $qb->getQuery()->getSingleScalarResult();
     }
 

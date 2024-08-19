@@ -10,6 +10,7 @@
 namespace App\Form\Toolbar;
 
 use App\Repository\Query\ProjectQuery;
+use Symfony\Component\Form\Extension\Core\Type\TextType;
 use Symfony\Component\Form\AbstractType;
 use Symfony\Component\Form\FormBuilderInterface;
 use Symfony\Component\OptionsResolver\OptionsResolver;
@@ -25,6 +26,14 @@ final class ProjectToolbarForm extends AbstractType
     public function buildForm(FormBuilderInterface $builder, array $options): void
     {
         $this->addSearchTermInputField($builder);
+        $builder->add('projectId', TextType::class, [
+            'required' => false,
+            'label' => 'Project ID',
+        ])
+        ->add('activitySearch', TextType::class, [
+            'required' => false,
+            'label' => 'Search Activities',
+        ]);
         $this->addCustomerMultiChoice($builder, [], false);
         $this->addVisibilityChoice($builder);
         $this->addPageSizeChoice($builder);

@@ -44,6 +44,19 @@ class ActivityRepository extends EntityRepository
         return $this->findBy(['project' => $project]);
     }
 
+     /**
+     * @param int $projectId
+     * @return Activity[]
+     */
+    public function findByProjectId(int $projectId) //custom
+    {
+        return $this->createQueryBuilder('a')
+            ->where('a.project = :projectId')
+            ->setParameter('projectId', $projectId)
+            ->getQuery()
+            ->getResult();
+    }
+
     /**
      * @param int[] $activityIds
      * @return Activity[]

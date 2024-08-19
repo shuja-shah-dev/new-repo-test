@@ -17,7 +17,7 @@ class ProjectQuery extends BaseQuery implements VisibilityInterface
 
     public const PROJECT_ORDER_ALLOWED = [
         'name', 'description' => 'comment', 'customer', 'orderNumber', 'orderDate',
-        'project_start', 'project_end', 'budget', 'timeBudget', 'visible'
+        'project_start', 'project_end', 'budget', 'timeBudget', 'visible',  'Project_Id', 'activities'
     ];
 
     /**
@@ -27,6 +27,7 @@ class ProjectQuery extends BaseQuery implements VisibilityInterface
     private ?\DateTime $projectStart = null;
     private ?\DateTime $projectEnd = null;
     private ?bool $globalActivities = null;
+    private ?string $activitySearch = null; // Ensure this line is present
 
     public function __construct()
     {
@@ -37,6 +38,7 @@ class ProjectQuery extends BaseQuery implements VisibilityInterface
             'projectEnd' => null,
             'visibility' => VisibilityInterface::SHOW_VISIBLE,
             'globalActivities' => null,
+            'activitySearch' => null, // Ensure this line is present
         ]);
     }
 
@@ -115,5 +117,31 @@ class ProjectQuery extends BaseQuery implements VisibilityInterface
     public function setGlobalActivities(?bool $globalActivities): void
     {
         $this->globalActivities = $globalActivities;
+    }
+
+    public function getActivitySearch(): ?string // Ensure this method is present
+    {
+        return $this->activitySearch;
+    }
+
+    public function setActivitySearch(?string $activitySearch): self // Ensure this method is present
+    {
+        $this->activitySearch = $activitySearch;
+        return $this;
+    }
+
+    private $projectId;
+
+    // Other properties and methods...
+
+    public function getProjectId(): ?int
+    {
+        return $this->projectId;
+    }
+
+    public function setProjectId(?int $projectId): self
+    {
+        $this->projectId = $projectId;
+        return $this;
     }
 }

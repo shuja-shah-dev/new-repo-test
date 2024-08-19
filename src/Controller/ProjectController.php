@@ -40,9 +40,11 @@ use App\Repository\TeamRepository;
 use App\Utils\Context;
 use App\Utils\DataTable;
 use App\Utils\PageSetup;
+use Psr\Log\LoggerInterface;
 use Symfony\Component\EventDispatcher\EventDispatcherInterface;
 use Symfony\Component\ExpressionLanguage\Expression;
 use Symfony\Component\Form\FormInterface;
+use Symfony\Component\HttpClient\HttpClient;
 use Symfony\Component\HttpFoundation\Request;
 use Symfony\Component\HttpFoundation\Response;
 use Symfony\Component\Routing\Annotation\Route;
@@ -56,8 +58,18 @@ use Symfony\Component\Security\Http\Attribute\IsGranted;
 #[Route(path: '/admin/project')]
 final class ProjectController extends AbstractController
 {
-    public function __construct(private ProjectRepository $repository, private SystemConfiguration $configuration, private EventDispatcherInterface $dispatcher, private ProjectService $projectService)
+
+    private $logger;
+    private $client;
+    private $projectDirectory;
+    private $activityRepository;
+
+    public function __construct(ActivityRepository $activityRepository, string $projectDirectory, private ProjectRepository $repository, private SystemConfiguration $configuration, private EventDispatcherInterface $dispatcher, private ProjectService $projectService, LoggerInterface $logger)
     {
+        $this->logger = $logger;
+        $this->client = HttpClient::create();
+        $this->projectDirectory = $projectDirectory;
+        $this->activityRepository = $activityRepository;
     }
 
     #[Route(path: '/', defaults: ['page' => 1], name: 'admin_project', methods: ['GET'])]
@@ -77,6 +89,15 @@ final class ProjectController extends AbstractController
         $entries = $this->repository->getPagerfantaForQuery($query);
         $metaColumns = $this->findMetaColumns($query);
 
+        
+        // Fetch activities for each project
+        $activitiesByProject = [];
+        foreach ($entries as $project) {
+            $activities = $this->activityRepository->findBy(['project' => $project->getId()]);
+            $activitiesByProject[$project->getId()] = $activities;
+        }
+
+
         $table = new DataTable('project_admin', $query);
         $table->setPagination($entries);
         $table->setSearchForm($form);
@@ -90,6 +111,9 @@ final class ProjectController extends AbstractController
         $table->addColumn('orderDate', ['class' => 'd-none']);
         $table->addColumn('project_start', ['class' => 'd-none']);
         $table->addColumn('project_end', ['class' => 'd-none']);
+        $table->addColumn('Project_Id', ['class' => 'd-none']);
+
+        $table->addColumn('activities', ['class' => 'd-none', 'title' => 'activities']);
 
         foreach ($metaColumns as $metaColumn) {
             $table->addColumn('mf_' . $metaColumn->getName(), ['title' => $metaColumn->getLabel(), 'class' => 'd-none', 'orderBy' => false, 'data' => $metaColumn]);
@@ -116,6 +140,8 @@ final class ProjectController extends AbstractController
             'page_setup' => $page,
             'dataTable' => $table,
             'metaColumns' => $metaColumns,
+            'projects' => $entries,
+            'activitiesByProject' => $activitiesByProject,
             'now' => $this->getDateTimeFactory()->createDateTime(),
         ]);
     }
@@ -179,6 +205,267 @@ final class ProjectController extends AbstractController
         return $this->createProject($request, null);
     }
 
+    public function copyFolderContents(string $sourceFolderPath, string $destinationFolderPath): bool
+    {
+        $baseUrl = rtrim($_ENV['NEXTCLOUD_BASE_URL'], '/');
+        $username = $_ENV['NEXTCLOUD_USERNAME'];
+        $password = $_ENV['NEXTCLOUD_PASSWORD'];
+        $domain = $_ENV['NEXTCLOUD_DOMAIN'];
+
+        $sourceUrl = $baseUrl . '/' . ltrim($sourceFolderPath, '/');
+        $destinationUrl = $baseUrl . '/' . ltrim($destinationFolderPath, '/');
+
+        $this->logger->info("Source URL: $sourceUrl");
+        $this->logger->info("Destination URL: $destinationUrl");
+
+        try {
+            // List all contents of the source folder
+            $response = $this->client->request('PROPFIND', $sourceUrl, [
+                'auth_basic' => [$username, $password],
+                'headers' => [
+                    'Depth' => '1',
+                    'Content-Type' => 'application/xml',
+                ],
+                'body' => '<?xml version="1.0" encoding="UTF-8"?>
+                <d:propfind xmlns:d="DAV:" xmlns:oc="http://owncloud.org/ns" xmlns:nc="http://nextcloud.org/ns">
+                  <d:prop>
+                    <d:displayname/>
+                  </d:prop>
+                </d:propfind>',
+            ]);
+
+            if ($response->getStatusCode() !== 207) {
+                $this->logger->error("Failed to list source folder contents. Status code: " . $response->getStatusCode());
+                return false;
+            }
+
+            $body = $response->getContent();
+            $xml = new \SimpleXMLElement($body);
+            $xml->registerXPathNamespace('d', 'DAV:');
+
+            foreach ($xml->xpath('//d:response') as $response) {
+                $href = (string) $response->xpath('d:href')[0];
+                $href = rtrim($href, '/'); // Remove trailing slashes
+
+                // Extract item name
+                $itemName = basename($href);
+                if ($itemName === '' || $itemName === 'S000xx') { // Skip specific folder
+                    continue;
+                }
+
+                // Resolve correct URLs
+                $sourceItemUrl = $domain . $href;
+                $targetPath = $destinationUrl . '/' . $itemName;
+
+
+                // Copy file or folder
+                if (!$this->copyItem($sourceItemUrl, $targetPath, $username, $password)) {
+                    $this->logger->error("Failed to copy item: $sourceItemUrl to $targetPath");
+                    return false;
+                }
+            }
+
+            $this->logger->info("Successfully copied contents from $sourceFolderPath to $destinationFolderPath");
+            return true;
+        } catch (\Exception $e) {
+            $this->logger->error('Error copying folder contents: ' . $e->getMessage());
+            return false;
+        }
+    }
+
+
+    private function copyItem(string $sourceUrl, string $destinationUrl, string $username, string $password): bool
+    {
+        try {
+            $this->logger->info("Requesting copy from $sourceUrl to $destinationUrl");
+
+            $response = $this->client->request('COPY', $sourceUrl, [
+                'auth_basic' => [$username, $password],
+                'headers' => [
+                    'Destination' => $destinationUrl,
+                    'Overwrite' => 'F',
+                ],
+            ]);
+
+            $statusCode = $response->getStatusCode();
+            $this->logger->info("Copy response status code: $statusCode");
+
+            return $statusCode === 201 || $statusCode === 204;
+        } catch (\Exception $e) {
+            $this->logger->error('Error copying item: ' . $e->getMessage());
+            return false;
+        }
+    }
+    private function createFolderIfNotExists(string $folderName): bool
+    {
+        $baseUrl = rtrim($_ENV['NEXTCLOUD_BASE_URL'], '/');
+        $username = $_ENV['NEXTCLOUD_USERNAME'];
+        $password = $_ENV['NEXTCLOUD_PASSWORD'];
+        $folderUrl = $baseUrl . '/' . ltrim($folderName, '/');
+
+        try {
+            $response = $this->client->request('MKCOL', $folderUrl, [
+                'auth_basic' => [$username, $password],
+                'headers' => [
+                    'Content-Type' => 'application/xml',
+                ],
+            ]);
+
+            $statusCode = $response->getStatusCode();
+            if ($statusCode === 201) {
+                $this->logger->info("Folder created successfully: $folderUrl");
+                return true;
+            } elseif ($statusCode === 405) {
+                // 405 indicates that the folder already exists
+                $this->logger->info("Folder already exists: $folderUrl");
+                return true;
+            } else {
+                $this->logger->error("Unexpected status code while creating folder: $statusCode for $folderUrl");
+                return false;
+            }
+        } catch (\Exception $e) {
+            $this->logger->error('Error creating folder: ' . $e->getMessage());
+            return false;
+        }
+    }
+
+
+    private function renameFilesInFolder(string $folderPath): bool
+    {
+        $baseUrl = rtrim($_ENV['NEXTCLOUD_BASE_URL'], '/');
+        $username = $_ENV['NEXTCLOUD_USERNAME'];
+        $password = $_ENV['NEXTCLOUD_PASSWORD'];
+        $folderUrl = $baseUrl . '/' . ltrim($folderPath, '/');
+        $domain = $_ENV['NEXTCLOUD_DOMAIN'];
+
+        try {
+            // List all contents of the folder including nested folders
+            $response = $this->client->request('PROPFIND', $folderUrl, [
+                'auth_basic' => [$username, $password],
+                'headers' => [
+                    'Depth' => 'infinity',
+                    'Content-Type' => 'application/xml',
+                ],
+                'body' => '<?xml version="1.0" encoding="UTF-8"?>
+                <d:propfind xmlns:d="DAV:" xmlns:oc="http://owncloud.org/ns" xmlns:nc="http://nextcloud.org/ns">
+                  <d:prop>
+                    <d:displayname/>
+                  </d:prop>
+                </d:propfind>',
+            ]);
+
+            if ($response->getStatusCode() !== 207) {
+                $this->logger->error("Failed to list folder contents. Status code: " . $response->getStatusCode());
+                return false;
+            }
+
+            $body = $response->getContent();
+            $xml = new \SimpleXMLElement($body);
+            $xml->registerXPathNamespace('d', 'DAV:');
+
+            foreach ($xml->xpath('//d:response') as $response) {
+                $href = (string) $response->xpath('d:href')[0];
+                $href = rtrim($href, '/'); // Remove trailing slashes
+
+                // Extract item name and folder path
+                $itemName = basename($href);
+                $itemPath = ltrim(substr($href, strlen($baseUrl)), '/');
+
+                if ($itemName === '' || $itemName === 'S000xx') { // Skip specific folder
+                    continue;
+                }
+
+                // Rename files based on their name patterns
+                if (pathinfo($itemName, PATHINFO_EXTENSION)) {
+                    $newItemName = $this->generateNewFileName($itemName, $folderPath);
+                    if ($newItemName) {
+                        $sourceItemUrl = $domain . $href;
+
+
+                        $parsedUrl = parse_url($sourceItemUrl);
+                        $path = $parsedUrl['path'] ?? '';
+
+                        // Get the directory name (path without the file name)
+                        $basePath = dirname($path);
+
+                        // Reconstruct the URL with the base path
+                        $baseUrl = $parsedUrl['scheme'] . '://' . $parsedUrl['host'] . $basePath;
+
+
+
+                        $newItemUrl = $baseUrl . '/' . $newItemName;
+
+
+                        if (!$this->renameItem($sourceItemUrl, $newItemUrl, $username, $password)) {
+                            $this->logger->error("Failed to rename item: $sourceItemUrl to $newItemUrl");
+                            return false;
+                        }
+                    }
+                }
+            }
+
+            $this->logger->info("Successfully renamed files in folder $folderPath");
+            return true;
+        } catch (\Exception $e) {
+            $this->logger->error('Error renaming files in folder: ' . $e->getMessage());
+            return false;
+        }
+    }
+
+
+    private function renameItem(string $sourceUrl, string $destinationUrl, string $username, string $password): bool
+    {
+        try {
+            $this->logger->info("Requesting rename from $sourceUrl to $destinationUrl");
+
+            $response = $this->client->request('MOVE', $sourceUrl, [
+                'auth_basic' => [$username, $password],
+                'headers' => [
+                    'Destination' => $destinationUrl,
+                    'Overwrite' => 'F',
+                ],
+            ]);
+
+            $statusCode = $response->getStatusCode();
+            $this->logger->info("Rename response status code: $statusCode");
+
+            if ($statusCode === 403) {
+                $this->logger->error("Access denied while renaming item from $sourceUrl to $destinationUrl. Check permissions and paths.");
+            }
+
+            return $statusCode === 201 || $statusCode === 204;
+        } catch (\Exception $e) {
+            $this->logger->error('Error renaming item: ' . $e->getMessage());
+            return false;
+        }
+    }
+
+    private function generateNewFileName(string $itemName, string $folderPath): ?string
+    {
+        $folderId = basename($folderPath);
+        $fileExtension = pathinfo($itemName, PATHINFO_EXTENSION);
+        $fileBaseName = pathinfo($itemName, PATHINFO_FILENAME);
+
+        if (strpos($fileBaseName, 'Auftrag_') === 0) {
+            // Return with extension if it exists, otherwise just the base name
+            return $fileExtension ? 'Auftrag_' . $folderId . '.' . $fileExtension : 'Auftrag_' . $folderId;
+        }
+
+        if (strpos($fileBaseName, 'Verfahrensanweisung_') === 0) {
+            // Return with extension if it exists, otherwise just the base name
+            return $fileExtension ? 'Verfahrensanweisung_' . $folderId . '.' . $fileExtension : 'Verfahrensanweisung_' . $folderId;
+        }
+
+        if (strpos($fileBaseName, '_Pruefanweisung') !== false) {
+            // Return with the new folder ID and no extension if none exists
+            return $fileExtension ? $folderId . '_Pruefanweisung.' . $fileExtension : $folderId . '_Pruefanweisung';
+        }
+
+        // Return null if no specific pattern matches
+        return null;
+    }
+
+
     private function createProject(Request $request, ?Customer $customer = null): Response
     {
         $project = $this->projectService->createNewProject($customer);
@@ -189,7 +476,29 @@ final class ProjectController extends AbstractController
         if ($editForm->isSubmitted() && $editForm->isValid()) {
             try {
                 $this->projectService->saveNewProject($project, new Context($this->getUser()));
-                $this->flashSuccess('action.update.success');
+                // Create the folder in Nextcloud
+                $this->logger->info($project->getId());
+                $folderPath = '/' . $project->getId();
+                $folderCreated = $this->createFolderIfNotExists($folderPath);
+
+                if ($folderCreated) {
+                    $this->flashSuccess('action.update.success');
+                    // $sourceFolder = '/default';
+                    // $copySuccess = $this->copyFolderContents($sourceFolder, $folderPath);
+                    // $copySuccess = true;
+                    // if ($copySuccess) {
+                    //     $renameSuccess = $this->renameFilesInFolder($folderPath);
+                    //     if ($renameSuccess) {
+                    //         $this->flashSuccess('action.update.success');
+                    //     } else {
+                    //         $this->addFlash('error', 'Project Saved. Failed to rename contents in Nextcloud');
+                    //     }
+                    // } else {
+                    //     $this->addFlash('error', 'Project Saved. Failed to copy contents in Nextcloud');
+                    // }
+                } else {
+                    $this->addFlash('error', 'Project Saved. Failed to create folder in Nextcloud');
+                }
 
                 return $this->redirectToRouteAfterCreate('project_details', ['id' => $project->getId()]);
             } catch (\Exception $ex) {
@@ -478,12 +787,12 @@ final class ProjectController extends AbstractController
         $stats = $statisticService->getProjectStatistics($project);
 
         $deleteForm = $this->createFormBuilder(null, [
-                'attr' => [
-                    'data-form-event' => 'kimai.projectDelete',
-                    'data-msg-success' => 'action.delete.success',
-                    'data-msg-error' => 'action.delete.error',
-                ]
-            ])
+            'attr' => [
+                'data-form-event' => 'kimai.projectDelete',
+                'data-msg-success' => 'action.delete.success',
+                'data-msg-error' => 'action.delete.error',
+            ]
+        ])
             ->add('project', ProjectType::class, [
                 'ignore_project' => $project,
                 'customers' => $project->getCustomer(),
