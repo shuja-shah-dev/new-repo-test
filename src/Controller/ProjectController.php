@@ -64,10 +64,23 @@ final class ProjectController extends AbstractController
     private $projectDirectory;
     private $activityRepository;
 
+
+    private string $apiToken;
+
+    // public function __construct(HttpClientInterface $client, string $apiUrl, string $apiToken)
+    // {
+    //     $this->client = $client;
+    //     $this->apiUrl = $apiUrl;
+    //     $this->apiToken = $apiToken;
+    // }
+
     public function __construct(ActivityRepository $activityRepository, string $projectDirectory, private ProjectRepository $repository, private SystemConfiguration $configuration, private EventDispatcherInterface $dispatcher, private ProjectService $projectService, LoggerInterface $logger)
     {
         $this->logger = $logger;
         $this->client = HttpClient::create();
+
+        $this->apiToken = $this->getToken();
+
         $this->projectDirectory = $projectDirectory;
         $this->activityRepository = $activityRepository;
     }
@@ -89,7 +102,7 @@ final class ProjectController extends AbstractController
         $entries = $this->repository->getPagerfantaForQuery($query);
         $metaColumns = $this->findMetaColumns($query);
 
-        
+
         // Fetch activities for each project
         $activitiesByProject = [];
         foreach ($entries as $project) {
@@ -296,38 +309,81 @@ final class ProjectController extends AbstractController
             return false;
         }
     }
-    private function createFolderIfNotExists(string $folderName): bool
+
+    /**
+     * Fetches the API token using username and password.
+     */
+    private function getToken(): string
     {
-        $baseUrl = rtrim($_ENV['NEXTCLOUD_BASE_URL'], '/');
-        $username = $_ENV['NEXTCLOUD_USERNAME'];
-        $password = $_ENV['NEXTCLOUD_PASSWORD'];
-        $folderUrl = $baseUrl . '/' . ltrim($folderName, '/');
+        $apiUrl = rtrim($_ENV['SEAFILEAPIURL'], '/') . '/api2/auth-token/';
 
         try {
-            $response = $this->client->request('MKCOL', $folderUrl, [
-                'auth_basic' => [$username, $password],
-                'headers' => [
-                    'Content-Type' => 'application/xml',
+            $response = $this->client->request('POST', $apiUrl, [
+                'json' => [
+                    'username' => $_ENV['SEAFILE_USERNAME'],
+                    'password' => $_ENV['SEAFILE_PASSWORD'],
                 ],
             ]);
 
             $statusCode = $response->getStatusCode();
-            if ($statusCode === 201) {
-                $this->logger->info("Folder created successfully: $folderUrl");
-                return true;
-            } elseif ($statusCode === 405) {
-                // 405 indicates that the folder already exists
-                $this->logger->info("Folder already exists: $folderUrl");
-                return true;
+            if ($statusCode === 200) {
+                $data = $response->toArray();
+                $this->logger->info('Token fetched successfully.');
+                return $data['token'];
             } else {
-                $this->logger->error("Unexpected status code while creating folder: $statusCode for $folderUrl");
-                return false;
+                $this->logger->error("Failed to fetch token. Status code: $statusCode");
+                throw new \Exception('Failed to fetch API token.');
             }
         } catch (\Exception $e) {
-            $this->logger->error('Error creating folder: ' . $e->getMessage());
-            return false;
+            $this->logger->error('Error fetching token: ' . $e->getMessage());
+            throw $e;
         }
     }
+
+
+/**
+ * Creates a folder in Seafile if it does not already exist.
+ */
+public function createFolderIfNotExists(string $folderName): bool
+{
+    $apiUrl = rtrim($_ENV['SEAFILEAPIURL'], '/');
+    $repoId = '245cd1b3-01cc-40a8-94b8-9cb36daed4f7'; // Replace with your actual repo ID
+    $url = "$apiUrl/api2/repos/$repoId/dir/";
+
+    try {
+        // Adjust folder name for Seafile API requirements
+        $folderName = ltrim($folderName, '/'); // Ensure no leading slash
+
+        $response = $this->client->request('POST', $url, [
+            'headers' => [
+                'Authorization' => 'Token ' . $this->apiToken, // Correct token format
+            ],
+            'query' => [
+                'p' => "/$folderName", // Seafile requires the path to start with a slash
+            ],
+            'body' => [
+                'operation' => 'mkdir', // Seafile API operation
+            ],
+        ]);
+
+        $statusCode = $response->getStatusCode();
+        $responseContent = $response->getContent(false);
+
+        if ($statusCode === 201) {
+            $this->logger->info("Folder created successfully: $folderName");
+            return true;
+        } elseif ($statusCode === 405) {
+            $this->logger->info("Folder already exists: $folderName");
+            return true;
+        } else {
+            $this->logger->error("Unexpected status code: $statusCode for $folderName. Response: $responseContent");
+            return false;
+        }
+    } catch (\Exception $e) {
+        $this->logger->error('Error creating folder: ' . $e->getMessage());
+        return false;
+    }
+}
 
 
     private function renameFilesInFolder(string $folderPath): bool
@@ -478,7 +534,7 @@ final class ProjectController extends AbstractController
                 $this->projectService->saveNewProject($project, new Context($this->getUser()));
                 // Create the folder in Nextcloud
                 $this->logger->info($project->getId());
-                $folderPath = '/' . $project->getId();
+                $folderPath =  $project->getId();
                 $folderCreated = $this->createFolderIfNotExists($folderPath);
 
                 if ($folderCreated) {
@@ -497,7 +553,7 @@ final class ProjectController extends AbstractController
                     //     $this->addFlash('error', 'Project Saved. Failed to copy contents in Nextcloud');
                     // }
                 } else {
-                    $this->addFlash('error', 'Project Saved. Failed to create folder in Nextcloud');
+                    $this->addFlash('error', 'Project Saved. Failed to create folder in Cloud');
                 }
 
                 return $this->redirectToRouteAfterCreate('project_details', ['id' => $project->getId()]);
