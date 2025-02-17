@@ -347,7 +347,7 @@ final class ProjectController extends AbstractController
 public function createFolderIfNotExists(string $folderName): bool
 {
     $apiUrl = rtrim($_ENV['SEAFILEAPIURL'], '/');
-    $repoId = '245cd1b3-01cc-40a8-94b8-9cb36daed4f7'; // Replace with your actual repo ID
+    $repoId = 'f8600239-88c0-415b-9813-8f59c58d8578'; // Replace with your actual repo ID
     $url = "$apiUrl/api2/repos/$repoId/dir/";
 
     try {
@@ -532,6 +532,7 @@ public function createFolderIfNotExists(string $folderName): bool
         if ($editForm->isSubmitted() && $editForm->isValid()) {
             try {
                 $this->projectService->saveNewProject($project, new Context($this->getUser()));
+                // $this->flashSuccess('action.update.success');
                 // Create the folder in Nextcloud
                 $this->logger->info($project->getId());
                 $folderPath =  $project->getId();
