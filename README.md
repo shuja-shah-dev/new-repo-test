@@ -56,6 +56,10 @@ There are also documentations for:
 
 And if you don't want to host Kimai, you can use [the Cloud version](https://www.kimai.cloud/) of it.
 
+### Cutomizations for xis.ai
+ 
+ Please have a look inside Docs/readme.txt for all the information.
+
 ### Updating Kimai
 
 - [Update Kimai](https://www.kimai.org/documentation/updates.html) — get the latest version

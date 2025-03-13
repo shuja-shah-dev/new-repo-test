@@ -33,21 +33,26 @@ use App\Timesheet\TimesheetService;
 use App\Timesheet\TrackingMode\TrackingModeInterface;
 use App\Utils\DataTable;
 use App\Utils\PageSetup;
+use Psr\Log\LoggerInterface;
 use Symfony\Component\EventDispatcher\EventDispatcherInterface;
 use Symfony\Component\Form\FormError;
 use Symfony\Component\Form\FormInterface;
 use Symfony\Component\HttpFoundation\Request;
 use Symfony\Component\HttpFoundation\Response;
 
+
 abstract class TimesheetAbstractController extends AbstractController
 {
+    private $logger;
     public function __construct(
         protected TimesheetRepository $repository,
         protected EventDispatcherInterface $dispatcher,
         protected TimesheetService $service,
         protected SystemConfiguration $configuration,
-        protected TagRepository $tagRepository
+        protected TagRepository $tagRepository,
+        LoggerInterface $logger
     ) {
+        $this->logger = $logger;
     }
 
     protected function getTrackingMode(): TrackingModeInterface
@@ -171,6 +176,7 @@ abstract class TimesheetAbstractController extends AbstractController
     {
         $entry = $this->service->createNewTimesheet($this->getUser(), $request);
 
+
         $preForm = $this->createFormForGetRequest(TimesheetPreCreateForm::class, $entry, [
             'include_user' => $this->includeUserInForms('create'),
         ]);
@@ -181,10 +187,47 @@ abstract class TimesheetAbstractController extends AbstractController
 
         if ($createForm->isSubmitted() && $createForm->isValid()) {
             try {
-                $this->service->saveNewTimesheet($entry);
+
+                $roles = $entry->getUser()->getRoles();
+                $this->logger->info("Roles: " . implode(', ', $roles));
+
+                if (in_array('ROLE_SUPER_ADMIN', $roles, true)) {
+                    $this->logger->info("User is a super admin.");
+                    $this->service->saveNewTimesheet($entry);
                 $this->flashSuccess('action.update.success');
 
                 return $this->redirectToRoute($this->getTimesheetRoute());
+                    // The user has the ROLE_SUPER_ADMIN role
+                    
+                } else{
+                    $this->logger->info("User is not super admin.");
+                    // Get the start date and convert it to Asia/Karachi
+                    $tz = $entry->getTimezone();
+                    $startDate = $entry->getBegin();
+
+                    $startDate = (clone $startDate)->setTimezone(new \DateTimeZone($tz));
+
+                    // Prevent entries older than 20 minutes before the start time
+                    $currentTime = new \DateTime('now', new \DateTimeZone($tz));
+                    $this->logger->info("Current Time (Asia/Karachi): " . $currentTime->format('Y-m-d H:i:s T'));
+                    $allowedPastTime = (clone $currentTime)->modify('-20 minutes');
+                    $this->logger->info("Timezone: " . $tz);
+                    // Log values for debugging
+                    $this->logger->info("Start Date (Asia/Karachi): " . $startDate->format('Y-m-d H:i:s T'));
+                    $this->logger->info("Allowed Past Time: " . $allowedPastTime->format('Y-m-d H:i:s T'));
+
+
+                    if ($startDate  < $allowedPastTime) {
+                        throw new \Exception('You can not create a timesheet in the past.');
+                    }
+                    $this->service->saveNewTimesheet($entry);
+                    $this->flashSuccess('action.update.success');
+    
+                    return $this->redirectToRoute($this->getTimesheetRoute());
+                }
+
+
+                
             } catch (\Exception $ex) {
                 $this->handleFormUpdateException($ex, $createForm);
             }
@@ -198,6 +241,7 @@ abstract class TimesheetAbstractController extends AbstractController
             'template' => $this->getTrackingMode()->getEditTemplate(),
         ]);
     }
+
 
     protected function duplicate(Timesheet $timesheet, Request $request): Response
     {
