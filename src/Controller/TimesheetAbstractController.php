@@ -149,15 +149,48 @@ abstract class TimesheetAbstractController extends AbstractController
         $event = new TimesheetMetaDefinitionEvent($entry);
         $this->dispatcher->dispatch($event);
 
+        $originalStartDate = clone $entry->getBegin();
+
         $editForm = $this->getEditForm($entry, $request->get('page'));
         $editForm->handleRequest($request);
 
         if ($editForm->isSubmitted() && $editForm->isValid()) {
             try {
+                $roles = $entry->getUser()->getRoles();
+                $this->logger->info("Roles: " . implode(', ', $roles));
+
+                if (in_array('ROLE_SUPER_ADMIN', $roles, true)) {
+                    $this->logger->info("User is a super admin.");
                 $this->service->updateTimesheet($entry);
                 $this->flashSuccess('action.update.success');
 
                 return $this->redirectToRoute($this->getTimesheetRoute(), ['page' => $request->get('page', 1)]);
+                }else{
+                    $this->logger->info("User is not super admin.");
+                    // Get the start date and convert it to Asia/Karachi
+                    $tz = $entry->getTimezone();
+                    $startDate = $entry->getBegin();
+
+                    $startDate = (clone $startDate)->setTimezone(new \DateTimeZone($tz));
+
+                    // Prevent entries older than 20 minutes before the start time
+                    $currentTime = new \DateTime('now', new \DateTimeZone($tz));
+                    $this->logger->info("original start date(not edited) " . $originalStartDate->format('Y-m-d H:i:s T'));
+                    $allowedPastTime = (clone $originalStartDate)->modify('-20 minutes');
+                    $this->logger->info("Timezone: " . $tz);
+                    // Log values for debugging
+                    $this->logger->info("Start Date (Asia/Karachi): " . $startDate->format('Y-m-d H:i:s T'));
+                    $this->logger->info("Allowed Past Time: " . $allowedPastTime->format('Y-m-d H:i:s T'));
+
+
+                    if ($startDate  < $allowedPastTime) {
+                        throw new \Exception('You can not create a timesheet in the past.');
+                    }
+                    $this->service->updateTimesheet($entry);
+                    $this->flashSuccess('action.update.success');
+    
+                    return $this->redirectToRoute($this->getTimesheetRoute(), ['page' => $request->get('page', 1)]);
+                }
             } catch (\Exception $ex) {
                 $this->flashUpdateException($ex);
             }
