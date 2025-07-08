@@ -79,7 +79,7 @@ final class ProjectController extends AbstractController
         $this->logger = $logger;
         $this->client = HttpClient::create();
 
-        $this->apiToken = $this->getToken();
+        // $this->apiToken = $this->getToken();
 
         $this->projectDirectory = $projectDirectory;
         $this->activityRepository = $activityRepository;
@@ -532,14 +532,14 @@ public function createFolderIfNotExists(string $folderName): bool
         if ($editForm->isSubmitted() && $editForm->isValid()) {
             try {
                 $this->projectService->saveNewProject($project, new Context($this->getUser()));
-                // $this->flashSuccess('action.update.success');
+                $this->flashSuccess('action.update.success');
                 // Create the folder in Nextcloud
-                $this->logger->info($project->getId());
-                $folderPath =  $project->getId();
-                $folderCreated = $this->createFolderIfNotExists($folderPath);
+                // $this->logger->info($project->getId());
+                // $folderPath =  $project->getId();
+                // $folderCreated = $this->createFolderIfNotExists($folderPath);
 
-                if ($folderCreated) {
-                    $this->flashSuccess('action.update.success');
+                // if ($folderCreated) {
+                //     $this->flashSuccess('action.update.success');
                     // $sourceFolder = '/default';
                     // $copySuccess = $this->copyFolderContents($sourceFolder, $folderPath);
                     // $copySuccess = true;
@@ -553,9 +553,9 @@ public function createFolderIfNotExists(string $folderName): bool
                     // } else {
                     //     $this->addFlash('error', 'Project Saved. Failed to copy contents in Nextcloud');
                     // }
-                } else {
-                    $this->addFlash('error', 'Project Saved. Failed to create folder in Cloud');
-                }
+                // } else {
+                //     $this->addFlash('error', 'Project Saved. Failed to create folder in Cloud');
+                // }
 
                 return $this->redirectToRouteAfterCreate('project_details', ['id' => $project->getId()]);
             } catch (\Exception $ex) {
